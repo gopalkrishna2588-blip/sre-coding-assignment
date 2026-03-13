@@ -1,0 +1,141 @@
+openapi: "3.0.3"
+info:
+  title: SRE Assignment API Spec
+  version: "1.0.0"
+
+servers:
+  - url: http://localhost:8080
+    description: User Metadata Service
+  - url: http://localhost:8081
+    description: Deployment Portal
+
+paths:
+
+  /user:
+    post:
+      summary: Create a new user
+      operationId: createUser
+      tags: [User Metadata Service]
+      parameters:
+        - in: header
+          name: Idempotency-Key
+          required: false
+          schema:
+            type: string
+          description: If same key is sent again, returns existing user without creating duplicate
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateUserRequest'
+            example:
+              userId: "u-001"
+              name: "Alice"
+              email: "alice@example.com"
+              phone: "9876543210"
+      responses:
+        "201":
+          description: User created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UserResponse'
+        "409":
+          description: user_id or email already exists
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        "503":
+          description: DB unavailable (circuit breaker open)
+
+  /user/{id}:
+    get:
+      summary: Get user metadata by user_id
+      operationId: getUser
+      tags: [User Metadata Service]
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: User found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UserResponse'
+        "404":
+          description: User not found
+
+  /api/v1/services/register:
+    post:
+      summary: Register a new microservice
+      operationId: registerService
+      tags: [Deployment Portal]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RegisterServiceRequest'
+            example:
+              serviceName: "payment-service"
+              teamName: "payments-team"
+              repoUrl: "https://gitlab.example.com/payments-team/payment-service"
+      responses:
+        "201":
+          description: Service registered — ECR, IAM role, K8s manifest, pipeline created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RegisterServiceResponse'
+
+components:
+  schemas:
+
+    CreateUserRequest:
+      type: object
+      required: [userId, name, email]
+      properties:
+        userId:  { type: string }
+        name:    { type: string }
+        email:   { type: string, format: email }
+        phone:   { type: string }
+
+    UserResponse:
+      type: object
+      properties:
+        userId:    { type: string }
+        name:      { type: string }
+        email:     { type: string }
+        phone:     { type: string }
+        createdAt: { type: string, format: date-time }
+
+    ErrorResponse:
+      type: object
+      properties:
+        requestId: { type: string }
+        error:     { type: string }
+        message:   { type: string }
+        timestamp: { type: string, format: date-time }
+
+    RegisterServiceRequest:
+      type: object
+      required: [serviceName, teamName, repoUrl]
+      properties:
+        serviceName: { type: string }
+        teamName:    { type: string }
+        repoUrl:     { type: string }
+
+    RegisterServiceResponse:
+      type: object
+      properties:
+        serviceName:      { type: string }
+        teamName:         { type: string }
+        repoUrl:          { type: string }
+        createdResources: { type: array, items: { type: string } }
+        registeredAt:     { type: string, format: date-time }

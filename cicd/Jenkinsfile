@@ -1,0 +1,63 @@
+pipeline {
+    agent any
+
+    environment {
+        SERVICE_NAME   = 'user-metadata-service'
+        TEAM_NAME      = 'platform'
+        AWS_REGION     = 'ap-south-1'
+        AWS_ACCOUNT_ID = credentials('aws-account-id')
+        ECR_URI        = "${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/${SERVICE_NAME}"
+        IMAGE_TAG      = "${env.GIT_COMMIT[0..7]}"
+    }
+
+    stages {
+
+        stage('Build') {
+            agent { docker { image 'maven:3.9.6-eclipse-temurin-17' } }
+            steps {
+                sh 'mvn clean package -DskipTests'
+            }
+        }
+
+        stage('Docker Push') {
+            steps {
+                sh """
+                    aws ecr get-login-password --region ${AWS_REGION} \
+                      | docker login --username AWS --password-stdin ${ECR_URI}
+                    docker build -t ${ECR_URI}:${IMAGE_TAG} .
+                    docker push ${ECR_URI}:${IMAGE_TAG}
+                """
+            }
+        }
+
+        stage('Terraform Apply') {
+            steps {
+                dir('terraform/environments/dev') {
+                    withCredentials([[$class: 'AmazonWebServicesCredentialsBinding',
+                                      credentialsId: 'aws-credentials']]) {
+                        sh """
+                            terraform init -input=false
+                            terraform apply -input=false -auto-approve \
+                              -var="service_name=${SERVICE_NAME}" \
+                              -var="team_name=${TEAM_NAME}"
+                        """
+                    }
+                }
+            }
+        }
+
+        stage('Deploy to K8s') {
+            steps {
+                withKubeConfig([credentialsId: 'kubeconfig-dev']) {
+                    sh """
+                        kubectl set image deployment/${SERVICE_NAME} \
+                          ${SERVICE_NAME}=${ECR_URI}:${IMAGE_TAG} \
+                          -n ${TEAM_NAME}
+                        kubectl rollout status deployment/${SERVICE_NAME} \
+                          -n ${TEAM_NAME} --timeout=120s
+                    """
+                }
+            }
+        }
+    }
+}

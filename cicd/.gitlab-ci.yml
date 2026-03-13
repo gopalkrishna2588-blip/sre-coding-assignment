@@ -1,0 +1,53 @@
+stages:
+  - build
+  - push
+  - terraform
+  - deploy
+
+variables:
+  AWS_REGION: "ap-south-1"
+  ECR_URI: "$AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com/$SERVICE_NAME"
+
+build:
+  stage: build
+  image: maven:3.9.6-eclipse-temurin-17
+  script:
+    - mvn clean package -DskipTests
+  artifacts:
+    paths:
+      - target/*.jar
+
+docker-push:
+  stage: push
+  image: docker:24
+  services:
+    - docker:24-dind
+  script:
+    - aws ecr get-login-password --region $AWS_REGION | docker login --username AWS --password-stdin $ECR_URI
+    - docker build -t $ECR_URI:$CI_COMMIT_SHORT_SHA .
+    - docker push $ECR_URI:$CI_COMMIT_SHORT_SHA
+  only:
+    - main
+
+terraform-apply:
+  stage: terraform
+  image:
+    name: hashicorp/terraform:1.7
+    entrypoint: [""]
+  script:
+    - cd terraform/environments/dev
+    - terraform init -input=false
+    - terraform apply -input=false -auto-approve
+      -var="service_name=$SERVICE_NAME"
+      -var="team_name=$TEAM_NAME"
+  only:
+    - main
+
+deploy:
+  stage: deploy
+  image: bitnami/kubectl:latest
+  script:
+    - kubectl set image deployment/$SERVICE_NAME $SERVICE_NAME=$ECR_URI:$CI_COMMIT_SHORT_SHA -n $TEAM_NAME
+    - kubectl rollout status deployment/$SERVICE_NAME -n $TEAM_NAME --timeout=120s
+  only:
+    - main
